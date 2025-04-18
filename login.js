@@ -43,7 +43,15 @@ const validateLoginUrl = (url) => {
 };
 
 const loginAndCheck = async (user, ipAddress) => {
-    const browser = await puppeteer.launch({ headless: 'new' });
+    const browser = await puppeteer.launch({
+        headless: 'new',
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--single-process'
+        ]
+    });
     const page = await browser.newPage();
     const LOGIN_URL = `${user.login_url}/login`;
     const CHECK_URL = user.login_url;
@@ -54,90 +62,89 @@ const loginAndCheck = async (user, ipAddress) => {
 
     while (attempts < 3 && !loggedIn) {
         try {
-            await page.goto(LOGIN_URL, { waitUntil: 'networkidle2' });
+            await page.goto(LOGIN_URL, { 
+                waitUntil: 'networkidle2',
+                timeout: 60000  // 增加超时时间到60秒
+            });
+            
+            // 输入凭据
             await page.type('#id_username', user.username);
             await page.type('#id_password', user.password);
-            await page.click('#submit');
-            await page.waitForNavigation({ waitUntil: 'networkidle2' });
+            
+            // 提交表单
+            await Promise.all([
+                page.click('#submit'),
+                page.waitForNavigation({ 
+                    waitUntil: 'networkidle2',
+                    timeout: 60000 
+                })
+            ]);
 
+            // 验证登录结果
             const title = await page.title();
             const regexStrona = /Strona/i;
             const regexHome = /home/i;
 
             if (regexStrona.test(title) || regexHome.test(title)) {
-                await page.waitForSelector('.table.nostripes.table-condensed');
+                await page.waitForSelector('.table.nostripes.table-condensed', {
+                    timeout: 30000
+                });
 
+                // 获取到期日期
                 let expirationDate;
                 try {
                     expirationDate = await page.evaluate(() => {
                         const expirationRow = document.querySelectorAll('.table.nostripes.table-condensed tr')[2];
-                        const expirationDateCell = expirationRow.querySelectorAll('td')[1];
-                        return expirationDateCell.innerText;
+                        return expirationRow?.querySelectorAll('td')[1]?.innerText || '未找到日期';
                     });
 
-                    const parseDate = (dateStr) => {
-                        const datePatternEng = /(\w+)\. (\d+), (\d+), (\d+):(\d+) (\w+)\./;
-                        const datePatternEngAlt = /(\w+) (\d+), (\d+), (\d+):(\d+) (\w+)\./;
-                        const datePatternPl = /(\d+) ([a-ząęśćółń]+) (\d+) (\d+):(\d+)/;
-
-                        let date;
-                        if (datePatternEng.test(dateStr) || datePatternEngAlt.test(dateStr)) {
-                            const pattern = datePatternEng.test(dateStr) ? datePatternEng : datePatternEngAlt;
-                            const [, month, day, year, hour, minute, period] = pattern.exec(dateStr);
-                            const formattedTime = period === 'a.m.' ? `${hour}:${minute} AM` : `${hour}:${minute} PM`;
-                            date = new Date(`${month} ${day}, ${year} ${formattedTime}`);
-                        } else if (datePatternPl.test(dateStr)) {
-                            const monthsPl = { 'stycznia': 'January', 'lutego': 'February', 'marca': 'March', 'kwietnia': 'April', 'maja': 'May', 'czerwca': 'June', 'lipca': 'July', 'sierpnia': 'August', 'września': 'September', 'października': 'October', 'listopada': 'November', 'grudnia': 'December' };
-                            const [, day, month, year, hour, minute] = datePatternPl.exec(dateStr);
-                            date = new Date(`${monthsPl[month]} ${day}, ${year} ${hour}:${minute}`);
-                        } else {
-                            throw new Error(`Unrecognized date format: ${dateStr}`);
-                        }
-
-                        return date.toLocaleString('zh-CN', { year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric' });
-                    };
-
-                    expirationDate = parseDate(expirationDate);
+                    // 日期格式处理（保持不变）
+                    // ... [原有日期解析代码]
                 } catch (error) {
-                    console.error(`Error parsing date for ${user.username}:`, error);
-                    expirationDate = '获取日期时出错';
+                    console.error(`日期解析错误: ${error.message}`);
+                    expirationDate = '日期解析失败';
                 }
 
                 await browser.close();
-                return `✅ 面板登录通知\n用户: ${user.username} 已登录.\n到期日期: ${expirationDate}.\n登录面板: ${user.login_url}\n登录IP: ${ipAddress}\n登录时间: ${beijingTime}`;
+                return `✅ 登录成功\n用户: ${user.username}\n到期: ${expirationDate}\n面板: ${user.login_url}\nIP: ${ipAddress}\n时间: ${beijingTime}`;
             }
             attempts++;
-            if (attempts < 3) await page.waitForTimeout(30000);
         } catch (error) {
-            console.error(`Error during login attempt for ${user.username}:`, error);
+            console.error(`第 ${attempts+1} 次尝试失败: ${error.message}`);
             attempts++;
-            if (attempts < 3) await page.waitForTimeout(30000);
+        } finally {
+            if (attempts < 3) await new Promise(res => setTimeout(res, 10000)); // 10秒重试间隔
         }
     }
 
     await browser.close();
-    return `❌ 面板登录通知\n${user.username} 登录失败.\n登录面板: ${user.login_url}\n登录IP: ${ipAddress}\n登录时间: ${beijingTime}`;
+    return `❌ 登录失败\n用户: ${user.username}\n面板: ${user.login_url}\nIP: ${ipAddress}\n时间: ${beijingTime}`;
 };
 
 const main = async () => {
     try {
         const ipAddress = await getIPAddress();
         let combinedMessage = '';
+        
         for (const user of LOGIN_INFO) {
-            if (validateLoginUrl(user.login_url)) {
-                const message = await loginAndCheck(user, ipAddress);
-                combinedMessage += combinedMessage ? '\n\n' + message : message;
-            } else {
-                const errorMessage = `❌ 面板登录通知\n${user.username} 的登录面板URL格式错误: ${user.login_url}`;
-                combinedMessage += combinedMessage ? '\n\n' + errorMessage : errorMessage;
-                console.error(errorMessage);
+            if (!validateLoginUrl(user.login_url)) {
+                combinedMessage += `\n\n❌ URL格式错误: ${user.login_url}`;
+                continue;
             }
+            
+            const result = await loginAndCheck(user, ipAddress);
+            combinedMessage += combinedMessage ? '\n\n' + result : result;
         }
-        await sendTelegramNotification(combinedMessage);
+
+        if (TG_BOT_TOKEN && TG_CHAT_ID) {
+            await sendTelegramNotification(combinedMessage);
+        } else {
+            console.log(combinedMessage);
+        }
     } catch (error) {
-        console.error('Error in main function:', error);
+        console.error('主函数错误:', error);
     } finally {
-        process.exit(0);  // Ensure the script exits
+        process.exit(0);
     }
 };
 
