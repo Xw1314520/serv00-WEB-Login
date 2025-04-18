@@ -1,29 +1,27 @@
-name: Auto Login Serv00
+name: Login in Panel
 
 on:
   schedule:
-    - cron: '0 13 */60 * *'  # 每60天的13:00（UTC时间）执行
-  workflow_dispatch:          # 保留手动触发功能
+    - cron: '0 13 */30 * *'  # 每隔10天的13:00（下午1点）执行
+  workflow_dispatch:
 
 jobs:
   login:
     runs-on: ubuntu-latest
-    timeout-minutes: 5        # 添加超时限制
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4  # 升级到最新版
+    - name: Checkout repository
+      uses: actions/checkout@v2
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
+    - name: Set up Node.js
+      uses: actions/setup-node@v2
       with:
-        node-version: '20'    # 升级到LTS版本
-        cache: 'npm'          # 启用依赖缓存
+        node-version: '14'
 
     - name: Install dependencies
-      run: npm ci             # 更安全的依赖安装方式
+      run: npm install
 
-    - name: Execute login
+    - name: Run login script
       run: npm start
       env:
         TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
